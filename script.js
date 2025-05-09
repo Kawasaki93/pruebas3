@@ -11,7 +11,7 @@ if ('serviceWorker' in navigator) {
 // Variables globales
 let totalEfectivo = 0;
 let totalTarjeta = 0;
-let db;
+let db = null;
 let isOnline = navigator.onLine;
 let syncQueue = new Map();
 let lastSyncTime = null;
@@ -20,50 +20,107 @@ let pagosListener = null;
 let serverStatus = {
   isConnected: false,
   lastCheck: null,
-  connectionAttempts: 0
+  connectionAttempts: 0,
+  lastError: null
 };
 
 // Funciones para Firebase
 const FirebaseService = {
-  // Verificar estado del servidor
+  // Verificar estado del servidor con diagnóstico
   async verificarEstadoServidor() {
     try {
-      console.log('Verificando estado del servidor...');
+      console.log('Iniciando diagnóstico del servidor...');
       
-      // Intentar una operación simple de lectura
-      const testDoc = await db.collection('hamacas').limit(1).get();
+      // Verificar si Firebase está disponible
+      if (typeof firebase === 'undefined') {
+        throw new Error('Firebase no está disponible');
+      }
+
+      // Verificar si la instancia de Firestore existe
+      if (!db) {
+        console.log('Reinicializando Firestore...');
+        db = firebase.firestore();
+      }
+
+      // Intentar una operación simple de lectura con timeout
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout al conectar con el servidor')), 5000)
+      );
+
+      const testDoc = await Promise.race([
+        db.collection('hamacas').limit(1).get(),
+        timeoutPromise
+      ]);
       
       serverStatus.isConnected = true;
       serverStatus.lastCheck = new Date();
       serverStatus.connectionAttempts = 0;
+      serverStatus.lastError = null;
       
       // Actualizar UI con el estado
-      this.actualizarEstadoConexion(true);
+      this.actualizarEstadoConexion(true, 'Servidor Conectado');
       
-      console.log('Servidor conectado y funcionando correctamente');
+      console.log('Diagnóstico completado: Servidor conectado y funcionando correctamente');
       return true;
     } catch (error) {
-      console.error('Error al verificar estado del servidor:', error);
+      console.error('Error en diagnóstico del servidor:', error);
       serverStatus.isConnected = false;
+      serverStatus.lastError = error.message;
       serverStatus.connectionAttempts++;
       
-      // Actualizar UI con el estado
-      this.actualizarEstadoConexion(false);
+      // Actualizar UI con el estado y el error
+      this.actualizarEstadoConexion(false, `Error: ${error.message}`);
       
-      // Reintentar después de un error
-      if (serverStatus.connectionAttempts < 3) {
-        setTimeout(() => this.verificarEstadoServidor(), 5000);
+      // Reintentar después de un error con backoff exponencial
+      if (serverStatus.connectionAttempts < 5) {
+        const delay = Math.min(1000 * Math.pow(2, serverStatus.connectionAttempts), 30000);
+        console.log(`Reintentando conexión en ${delay/1000} segundos...`);
+        setTimeout(() => this.verificarEstadoServidor(), delay);
+      } else {
+        console.error('Número máximo de intentos alcanzado');
+        this.mostrarDialogoReconexion();
       }
       
       return false;
     }
   },
 
+  // Mostrar diálogo de reconexión
+  mostrarDialogoReconexion() {
+    const dialog = document.createElement('div');
+    dialog.style.position = 'fixed';
+    dialog.style.top = '50%';
+    dialog.style.left = '50%';
+    dialog.style.transform = 'translate(-50%, -50%)';
+    dialog.style.backgroundColor = 'white';
+    dialog.style.padding = '20px';
+    dialog.style.borderRadius = '5px';
+    dialog.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+    dialog.style.zIndex = '1000';
+    dialog.innerHTML = `
+      <h3>Problema de Conexión</h3>
+      <p>No se pudo conectar con el servidor después de varios intentos.</p>
+      <p>Último error: ${serverStatus.lastError}</p>
+      <button id="reconectarBtn" style="margin: 10px; padding: 5px 10px;">Reintentar Conexión</button>
+      <button id="recargarBtn" style="margin: 10px; padding: 5px 10px;">Recargar Página</button>
+    `;
+    document.body.appendChild(dialog);
+
+    document.getElementById('reconectarBtn').onclick = () => {
+      document.body.removeChild(dialog);
+      serverStatus.connectionAttempts = 0;
+      this.verificarEstadoServidor();
+    };
+
+    document.getElementById('recargarBtn').onclick = () => {
+      window.location.reload();
+    };
+  },
+
   // Actualizar UI con el estado de la conexión
-  actualizarEstadoConexion(conectado) {
+  actualizarEstadoConexion(conectado, mensaje) {
     const statusElement = document.getElementById('serverStatus');
     if (!statusElement) {
-      // Crear elemento si no existe
       const div = document.createElement('div');
       div.id = 'serverStatus';
       div.style.position = 'fixed';
@@ -72,20 +129,22 @@ const FirebaseService = {
       div.style.padding = '10px';
       div.style.borderRadius = '5px';
       div.style.zIndex = '1000';
+      div.style.transition = 'all 0.3s ease';
       document.body.appendChild(div);
     }
 
     const element = document.getElementById('serverStatus');
     if (conectado) {
       element.style.backgroundColor = '#4CAF50';
-      element.textContent = 'Servidor Conectado';
+      element.style.color = 'white';
     } else {
       element.style.backgroundColor = '#f44336';
-      element.textContent = 'Servidor Desconectado';
+      element.style.color = 'white';
     }
+    element.textContent = mensaje;
   },
 
-  // Inicializar Firebase
+  // Inicializar Firebase con mejor manejo de errores
   async inicializar() {
     try {
       console.log('Iniciando Firebase...');
@@ -94,8 +153,15 @@ const FirebaseService = {
         throw new Error('Firebase no está disponible');
       }
 
+      // Inicializar Firebase si no está inicializado
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+        console.log('Firebase inicializado correctamente');
+      }
+
       // Obtener la instancia de Firestore
       db = firebase.firestore();
+      console.log('Firestore inicializado correctamente');
       
       // Configurar persistencia offline
       try {
@@ -133,7 +199,7 @@ const FirebaseService = {
       return true;
     } catch (error) {
       console.error('Error al inicializar Firebase:', error);
-      this.actualizarEstadoConexion(false);
+      this.actualizarEstadoConexion(false, `Error de inicialización: ${error.message}`);
       return false;
     }
   },
@@ -151,7 +217,7 @@ const FirebaseService = {
     window.addEventListener('offline', () => {
       console.log('Conexión perdida');
       isOnline = false;
-      this.actualizarEstadoConexion(false);
+      this.actualizarEstadoConexion(false, 'Servidor Desconectado');
     });
   },
 
@@ -209,83 +275,105 @@ const FirebaseService = {
 
   // Inicializar listeners
   async init() {
+    if (!db) {
+      console.error('Firestore no está inicializado');
+      return;
+    }
+
     console.log('Iniciando listeners de Firebase...');
     
-    // Configurar listener de hamacas con mejor manejo de cambios
-    hamacasListener = db.collection('hamacas')
-      .onSnapshot((snapshot) => {
-        console.log('Cambios detectados en hamacas:', snapshot.docChanges().length);
-        
-        snapshot.docChanges().forEach((change) => {
-          const datos = change.doc.data();
-          const hamacaId = change.doc.id;
-          const hamaca = document.querySelector(`#${hamacaId}`);
+    try {
+      // Configurar listener de hamacas
+      hamacasListener = db.collection('hamacas')
+        .onSnapshot((snapshot) => {
+          console.log('Cambios detectados en hamacas:', snapshot.docChanges().length);
+          
+          snapshot.docChanges().forEach((change) => {
+            const datos = change.doc.data();
+            const hamacaId = change.doc.id;
+            const hamaca = document.querySelector(`#${hamacaId}`);
 
-          if (hamaca) {
-            if (change.type === 'added' || change.type === 'modified') {
-              // Actualizar color
-              if (datos.step !== undefined) {
-                for (let i = 1; i <= 6; i++) {
-                  hamaca.classList.remove(`step${i}`);
-                }
-                if (datos.step > 0) {
-                  hamaca.classList.add(`step${datos.step}`);
-                }
-                hamaca.dataset.actualStep = datos.step;
+            if (hamaca) {
+              if (change.type === 'added' || change.type === 'modified') {
+                // Actualizar UI
+                this.actualizarUIHamaca(hamacaId, datos);
+                
+                // Actualizar localStorage
+                const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
+                hamacasLocales[hamacaId] = {
+                  step: datos.step,
+                  cliente: datos.cliente,
+                  ultimaActualizacion: datos.ultimaActualizacion
+                };
+                localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
               }
-
-              // Actualizar cliente
-              if (datos.cliente) {
-                const inputCliente = hamaca.querySelector('.customer_name');
-                if (inputCliente) {
-                  inputCliente.value = datos.cliente;
-                }
-              }
-
-              // Actualizar localStorage
-              const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
-              hamacasLocales[hamacaId] = {
-                step: datos.step,
-                cliente: datos.cliente,
-                ultimaActualizacion: datos.ultimaActualizacion
-              };
-              localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
             }
-          }
+          });
+        }, (error) => {
+          console.error('Error en listener de hamacas:', error);
+          setTimeout(() => this.reiniciarListeners(), 5000);
         });
-      }, (error) => {
-        console.error('Error en listener de hamacas:', error);
-        setTimeout(() => this.reiniciarListeners(), 5000);
-      });
 
-    // Configurar listener de pagos con mejor manejo de cambios
-    pagosListener = db.collection('pagos')
-      .orderBy('fecha', 'desc')
-      .limit(100)
-      .onSnapshot((snapshot) => {
-        console.log('Cambios detectados en pagos:', snapshot.docChanges().length);
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const pago = change.doc.data();
-            this.actualizarTotales(pago.metodoPago, pago.total);
-            this.agregarAlHistorial(
-              pago.hamaca,
-              pago.total,
-              pago.recibido,
-              pago.cambio,
-              pago.metodoPago
-            );
-          }
+      // Configurar listener de pagos
+      pagosListener = db.collection('pagos')
+        .orderBy('fecha', 'desc')
+        .limit(100)
+        .onSnapshot((snapshot) => {
+          console.log('Cambios detectados en pagos:', snapshot.docChanges().length);
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const pago = change.doc.data();
+              this.actualizarTotales(pago.metodoPago, pago.total);
+              this.agregarAlHistorial(
+                pago.hamaca,
+                pago.total,
+                pago.recibido,
+                pago.cambio,
+                pago.metodoPago
+              );
+            }
+          });
+        }, (error) => {
+          console.error('Error en listener de pagos:', error);
+          setTimeout(() => this.reiniciarListeners(), 5000);
         });
-      }, (error) => {
-        console.error('Error en listener de pagos:', error);
-        setTimeout(() => this.reiniciarListeners(), 5000);
-      });
+
+      console.log('Listeners configurados correctamente');
+    } catch (error) {
+      console.error('Error al configurar listeners:', error);
+      throw error;
+    }
+  },
+
+  // Actualizar UI de una hamaca
+  actualizarUIHamaca(hamacaId, datos) {
+    const hamaca = document.querySelector(`#${hamacaId}`);
+    if (hamaca) {
+      if (datos.step !== undefined) {
+        for (let i = 1; i <= 6; i++) {
+          hamaca.classList.remove(`step${i}`);
+        }
+        if (datos.step > 0) {
+          hamaca.classList.add(`step${datos.step}`);
+        }
+        hamaca.dataset.actualStep = datos.step;
+      }
+      if (datos.cliente) {
+        const inputCliente = hamaca.querySelector('.customer_name');
+        if (inputCliente) {
+          inputCliente.value = datos.cliente;
+        }
+      }
+    }
   },
 
   // Guardar hamaca con verificación de servidor
   async guardarHamaca(hamacaId, datos) {
     try {
+      if (!db) {
+        throw new Error('Firestore no está inicializado');
+      }
+
       console.log('Guardando hamaca:', hamacaId, datos);
       
       // Verificar estado del servidor antes de guardar
@@ -326,30 +414,8 @@ const FirebaseService = {
       console.log('Hamaca guardada en Firebase');
     } catch (error) {
       console.error('Error al guardar hamaca:', error);
-      this.actualizarEstadoConexion(false);
+      this.actualizarEstadoConexion(false, `Error al guardar hamaca: ${error.message}`);
       throw error;
-    }
-  },
-
-  // Actualizar UI de una hamaca
-  actualizarUIHamaca(hamacaId, datos) {
-    const hamaca = document.querySelector(`#${hamacaId}`);
-    if (hamaca) {
-      if (datos.step !== undefined) {
-        for (let i = 1; i <= 6; i++) {
-          hamaca.classList.remove(`step${i}`);
-        }
-        if (datos.step > 0) {
-          hamaca.classList.add(`step${datos.step}`);
-        }
-        hamaca.dataset.actualStep = datos.step;
-      }
-      if (datos.cliente) {
-        const inputCliente = hamaca.querySelector('.customer_name');
-        if (inputCliente) {
-          inputCliente.value = datos.cliente;
-        }
-      }
     }
   },
 
