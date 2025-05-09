@@ -1,18 +1,82 @@
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', async () => {
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/',
-        updateViaCache: 'none'
-      });
-      console.log('Service Worker registrado correctamente:', registration);
-    } catch (error) {
-      console.warn('Error al registrar el Service Worker:', error);
-    }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      console.log("Service Worker registrado", reg);
+    }).catch((err) => {
+      console.error("Error al registrar el Service Worker", err);
+    });
   });
 }
 
+// Funciones para Firebase
+const FirebaseService = {
+  // Guardar estado de una hamaca
+  async guardarHamaca(hamacaId, datos) {
+    try {
+      await db.collection('hamacas').doc(hamacaId).set({
+        ...datos,
+        ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      console.log('Hamaca guardada:', hamacaId);
+    } catch (error) {
+      console.error('Error al guardar hamaca:', error);
+    }
+  },
 
+  // Guardar pago
+  async guardarPago(datos) {
+    try {
+      await db.collection('pagos').add({
+        ...datos,
+        fecha: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      console.log('Pago guardado');
+    } catch (error) {
+      console.error('Error al guardar pago:', error);
+    }
+  },
+
+  // Guardar cliente
+  async guardarCliente(hamacaId, nombreCliente) {
+    try {
+      await db.collection('clientes').doc(hamacaId).set({
+        nombre: nombreCliente,
+        fechaAsignacion: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      console.log('Cliente guardado:', nombreCliente);
+    } catch (error) {
+      console.error('Error al guardar cliente:', error);
+    }
+  },
+
+  // Cargar estado de todas las hamacas
+  async cargarEstadoHamacas() {
+    try {
+      const snapshot = await db.collection('hamacas').get();
+      snapshot.forEach(doc => {
+        const datos = doc.data();
+        const hamaca = document.querySelector(`#clon_${doc.id}`);
+        if (hamaca) {
+          // Restaurar color
+          if (datos.color) {
+            hamaca.style.backgroundColor = datos.color;
+          }
+          // Restaurar nombre del cliente
+          if (datos.cliente) {
+            hamaca.querySelector('.customer_name').value = datos.cliente;
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error al cargar hamacas:', error);
+    }
+  }
+};
+
+// Cargar estado inicial al iniciar la aplicación
+document.addEventListener('DOMContentLoaded', () => {
+  FirebaseService.cargarEstadoHamacas();
+});
 
 let variable1;
 for (var x = 1; x < 126; x++) {
@@ -238,11 +302,7 @@ for (var x = 1; x < 126; x++) {
     cloned_element.find(".sunbed_name").html(1);
 } else if (x === 125) {
     cloned_element.find(".sunbed_name").html(0);
-
-
-
 }
-
 
   $(".beach_wrapper").append(cloned_element);
 }
@@ -308,12 +368,6 @@ function toggleDesconectadosFila8() {
         $desconectadosFila8.css("visibility", "hidden");
         localStorage.setItem("desconectadosFila8Visibility", "hidden");
     }
-
-    // Sincronizar estado de visibilidad
-    syncVisibilityState({
-        rows: getCurrentRowVisibility(),
-        umbrellas: getCurrentUmbrellaVisibility()
-    });
 }
 
 // Al cargar la página, restaurar el estado de visibilidad de FILA 8-------
@@ -712,74 +766,43 @@ let totalTarjeta = 0;
 
 function calcularCambio() {
   const hamaca = document.getElementById('hamaca').value;
-  const totalSelect = parseFloat(document.getElementById('totalSelect').value);
-  const totalManual = parseFloat(document.getElementById('totalManual').value);
-  const recibidoSelect = parseFloat(document.getElementById('recibidoSelect').value);
-  const recibidoManual = parseFloat(document.getElementById('recibidoManual').value);
-  const metodo = document.getElementById('pago').value;
-
-  const total = totalManual || totalSelect;
-  const recibido = recibidoManual || recibidoSelect;
-
+  const totalSelect = document.getElementById('totalSelect');
+  const totalManual = document.getElementById('totalManual');
+  const recibidoSelect = document.getElementById('recibidoSelect');
+  const recibidoManual = document.getElementById('recibidoManual');
+  const pago = document.getElementById('pago').value;
+  
+  let total = totalManual.value ? parseFloat(totalManual.value) : parseFloat(totalSelect.value);
+  let recibido = recibidoManual.value ? parseFloat(recibidoManual.value) : parseFloat(recibidoSelect.value);
+  
   if (isNaN(total) || isNaN(recibido)) {
-    alert("Por favor, introduce montos válidos.");
+    alert('Por favor, ingrese valores válidos');
     return;
   }
-
+  
   const cambio = recibido - total;
-  document.getElementById('resultado').textContent = `Cambio: €${cambio.toFixed(2)}`;
-
-  const historial = document.getElementById('historial');
-  const li = document.createElement('li');
-
-  const fechaObj = new Date();
-  const dia = String(fechaObj.getDate()).padStart(2, '0');
-  const mes = String(fechaObj.getMonth() + 1).padStart(2, '0');
-  const anio = fechaObj.getFullYear();
-  const horas = String(fechaObj.getHours()).padStart(2, '0');
-  const minutos = String(fechaObj.getMinutes()).padStart(2, '0');
-  const fecha = `${dia}/${mes}/${anio} ${horas}:${minutos}`;
-
-  li.textContent = `Hamaca ${hamaca} - Total: €${total.toFixed(2)} - Recibido: €${recibido.toFixed(2)} - Cambio: €${cambio.toFixed(2)} - Método: ${metodo} - ${fecha}`;
-  historial.insertBefore(li, historial.firstChild);
-
-  if (metodo === 'efectivo') {
-    totalEfectivo += total;
-  } else {
-    totalTarjeta += total;
+  
+  if (cambio < 0) {
+    alert('El monto recibido es insuficiente');
+    return;
   }
-
-  document.getElementById('totalEfectivo').textContent = totalEfectivo.toFixed(2);
-  document.getElementById('totalTarjeta').textContent = totalTarjeta.toFixed(2);
-  document.getElementById('totalGeneral').textContent = (totalEfectivo + totalTarjeta).toFixed(2);
-
-  let datosHistorial = JSON.parse(localStorage.getItem("historial")) || [];
-  datosHistorial.push({
-    fecha,
-    hamaca: hamaca || "-",
-    total: total.toFixed(2),
-    recibido: recibido.toFixed(2),
-    cambio: cambio.toFixed(2),
-    metodo
-  });
-  localStorage.setItem("historial", JSON.stringify(datosHistorial));
-
-  let operaciones = JSON.parse(localStorage.getItem("operaciones")) || [];
-  operaciones.push({
-    fecha,
-    hamaca: hamaca || "-",
-    pagado: total.toFixed(2),
-    devuelto: ""
-  });
-  localStorage.setItem("operaciones", JSON.stringify(operaciones));
-
-  // Sincronizar el registro
-  syncCalculatorLog({
+  
+  document.getElementById('resultado').innerHTML = `Cambio: €${cambio.toFixed(2)}`;
+  
+  // Guardar el pago en Firebase
+  FirebaseService.guardarPago({
+    hamaca: hamaca,
     total: total,
-    pagado: total.toFixed(2),
-    cambio: cambio.toFixed(2),
-    timestamp: new Date().toISOString()
+    recibido: recibido,
+    cambio: cambio,
+    metodoPago: pago
   });
+  
+  // Actualizar totales
+  actualizarTotales(pago, total);
+  
+  // Agregar al historial
+  agregarAlHistorial(hamaca, total, recibido, cambio, pago);
 }
 
 function procesarDevolucion() {
@@ -964,16 +987,12 @@ function descargarLog() {
 
 //FUNCIONAMIENTO DE SERVICE WORKER NO TOCAR
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', async () => {
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/',
-        updateViaCache: 'none'
-      });
-      console.log('Service Worker registrado correctamente:', registration);
-    } catch (error) {
-      console.warn('Error al registrar el Service Worker:', error);
-    }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      console.log("Service Worker registrado", reg);
+    }).catch((err) => {
+      console.error("Error al registrar el Service Worker", err);
+    });
   });
 }
 
@@ -991,11 +1010,9 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 
         el.on('dblclick', function (event) {
             event.stopPropagation();
-            console.log('Doble clic detectado en:', el.attr('id'));
 
             const currentStep = parseInt(el.data('actual-step')) || 0;
             const newStep = currentStep >= stepsCount ? 1 : currentStep + 1;
-            console.log('Cambiando de paso', currentStep, 'a', newStep);
 
             // Eliminar clases anteriores
             for (let i = 1; i <= stepsCount; i++) {
@@ -1008,20 +1025,6 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 
             // Guardar en localStorage
             localStorage.setItem(storageKey, newStep);
-
-            // Sincronizar con Firebase
-            if (el.hasClass('sunbed')) {
-                syncSunbedState(el.attr('id'), {
-                    color: el.css('backgroundColor'),
-                    clientName: el.find('.customer_name').val(),
-                    step: newStep
-                });
-            } else if (el.hasClass('circle')) {
-                syncCircleState(el.attr('id'), {
-                    color: el.css('backgroundColor'),
-                    step: newStep
-                });
-            }
         });
 
         // Restaurar estado desde localStorage
@@ -1037,10 +1040,8 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 }
 
 // Aplicamos color cycle separado
-$(document).ready(function() {
-    setupColorCycle('.circle', 3, 'circle_color_');
-    setupColorCycle('.sunbed', 6, 'sunbed_color_');
-});
+setupColorCycle('.circle', 3, 'circle_color_');
+setupColorCycle('.sunbed', 6, 'sunbed_color_');
 
 
 //------zona pruebas
@@ -1099,191 +1100,47 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// Modificar la función que maneja los clicks en los sunbeds
-function handleSunbedClick(element) {
-  const sunbedId = element.id;
-  const currentColor = element.style.backgroundColor;
-  const clientName = element.querySelector('.client-name').textContent;
-  
-  // Sincronizar con Firebase
-  syncSunbedState(sunbedId, {
-    color: currentColor,
-    clientName: clientName
-  });
-}
-
-// Modificar la función que maneja los clicks en los círculos
-function handleCircleClick(element) {
-  const circleId = element.id;
-  const currentColor = element.style.backgroundColor;
-  
-  // Sincronizar con Firebase
-  syncCircleState(circleId, {
-    color: currentColor
-  });
-}
-
-// Modificar las funciones de visibilidad
-function toggleDesconectadosFila8() {
-  var $desconectadosFila8 = $(".desconectadosfila8");
-  var currentVisibility = $desconectadosFila8.css("visibility");
-
-  if (currentVisibility === "hidden") {
-    $desconectadosFila8.css("visibility", "visible");
-    localStorage.setItem("desconectadosFila8Visibility", "visible");
+function actualizarTotales(metodo, monto) {
+  if (metodo === 'efectivo') {
+    totalEfectivo += monto;
   } else {
-    $desconectadosFila8.css("visibility", "hidden");
-    localStorage.setItem("desconectadosFila8Visibility", "hidden");
+    totalTarjeta += monto;
   }
 
-  // Sincronizar estado de visibilidad
-  syncVisibilityState({
-    rows: getCurrentRowVisibility(),
-    umbrellas: getCurrentUmbrellaVisibility()
-  });
+  document.getElementById('totalEfectivo').textContent = totalEfectivo.toFixed(2);
+  document.getElementById('totalTarjeta').textContent = totalTarjeta.toFixed(2);
+  document.getElementById('totalGeneral').textContent = (totalEfectivo + totalTarjeta).toFixed(2);
 }
 
-// Función auxiliar para obtener el estado actual de visibilidad de filas
-function getCurrentRowVisibility() {
-  const rows = [];
-  for (let i = 0; i < 9; i++) {
-    const row = document.querySelector(`.row-${i}`);
-    rows.push({
-      visible: row.style.display !== 'none'
-    });
+function agregarAlHistorial(hamaca, total, recibido, cambio, metodo) {
+  const historial = document.getElementById('historial');
+  const li = document.createElement('li');
+
+  const fechaObj = new Date();
+  const dia = String(fechaObj.getDate()).padStart(2, '0');
+  const mes = String(fechaObj.getMonth() + 1).padStart(2, '0');
+  const anio = fechaObj.getFullYear();
+  const horas = String(fechaObj.getHours()).padStart(2, '0');
+  const minutos = String(fechaObj.getMinutes()).padStart(2, '0');
+  const fecha = `${dia}/${mes}/${anio} ${horas}:${minutos}`;
+
+  li.textContent = `Hamaca ${hamaca} - Total: €${total.toFixed(2)} - Recibido: €${recibido.toFixed(2)} - Cambio: €${cambio.toFixed(2)} - Método: ${metodo} - ${fecha}`;
+  historial.insertBefore(li, historial.firstChild);
+}
+
+// Modificar la función que maneja los clics en las hamacas
+$(document).on('click', '.sunbed', function() {
+  const hamacaId = $(this).attr('id');
+  const color = $(this).css('backgroundColor');
+  const cliente = $(this).find('.customer_name').val();
+
+  // Guardar en Firebase
+  FirebaseService.guardarHamaca(hamacaId, {
+    color: color,
+    cliente: cliente
+  });
+
+  if (cliente) {
+    FirebaseService.guardarCliente(hamacaId, cliente);
   }
-  return rows;
-}
-
-// Función auxiliar para obtener el estado actual de visibilidad de sombrillas
-function getCurrentUmbrellaVisibility() {
-  const umbrellas = [];
-  document.querySelectorAll('.umbrella').forEach((umbrella, index) => {
-    umbrellas.push({
-      visible: umbrella.style.display !== 'none'
-    });
-  });
-  return umbrellas;
-}
-
-// Agregar event listeners para los sunbeds
-document.addEventListener('DOMContentLoaded', function() {
-  // Event listener para cambios en los sunbeds
-  document.querySelectorAll('.sunbed').forEach(sunbed => {
-    // Evento para cambios de color
-    sunbed.addEventListener('click', function(e) {
-      if (e.target.classList.contains('color-option')) {
-        const sunbedId = this.id;
-        const currentColor = this.style.backgroundColor;
-        const clientName = this.querySelector('.customer_name').value;
-        
-        // Sincronizar con Firebase
-        syncSunbedState(sunbedId, {
-          color: currentColor,
-          clientName: clientName
-        });
-      }
-    });
-
-    // Evento para cambios en el nombre del cliente
-    const nameInput = sunbed.querySelector('.customer_name');
-    if (nameInput) {
-      nameInput.addEventListener('change', function() {
-        const sunbedId = this.closest('.sunbed').id;
-        const currentColor = this.closest('.sunbed').style.backgroundColor;
-        const clientName = this.value;
-        
-        // Sincronizar con Firebase
-        syncSunbedState(sunbedId, {
-          color: currentColor,
-          clientName: clientName
-        });
-      });
-    }
-  });
-
-  // Event listener para cambios en los círculos
-  document.querySelectorAll('.circle').forEach(circle => {
-    circle.addEventListener('click', function() {
-      const circleId = this.id;
-      const currentColor = this.style.backgroundColor;
-      
-      // Sincronizar con Firebase
-      syncCircleState(circleId, {
-        color: currentColor
-      });
-    });
-  });
-});
-
-// Función para manejar el cambio de color
-function handleColorChange(element, maxSteps) {
-    const currentStep = parseInt(element.dataset.actualStep) || 0;
-    const newStep = currentStep >= maxSteps ? 1 : currentStep + 1;
-    
-    // Remover todas las clases de paso anteriores
-    for (let i = 1; i <= maxSteps; i++) {
-        element.classList.remove('step' + i);
-    }
-    
-    // Agregar la nueva clase
-    element.classList.add('step' + newStep);
-    element.dataset.actualStep = newStep;
-    
-    // Guardar en localStorage
-    const storageKey = element.classList.contains('sunbed') ? 
-        'sunbed_color_' + element.id : 
-        'circle_color_' + element.id;
-    localStorage.setItem(storageKey, newStep);
-    
-    // Sincronizar con Firebase
-    if (element.classList.contains('sunbed')) {
-        syncSunbedState(element.id, {
-            color: element.style.backgroundColor,
-            clientName: element.querySelector('.customer_name')?.value || '',
-            step: newStep
-        });
-    } else if (element.classList.contains('circle')) {
-        syncCircleState(element.id, {
-            color: element.style.backgroundColor,
-            step: newStep
-        });
-    }
-}
-
-// Configurar los event listeners para el cambio de color
-document.addEventListener('DOMContentLoaded', function() {
-    // Para sunbeds
-    document.querySelectorAll('.sunbed').forEach(sunbed => {
-        sunbed.addEventListener('dblclick', function(e) {
-            e.stopPropagation();
-            handleColorChange(this, 6);
-        });
-    });
-    
-    // Para círculos
-    document.querySelectorAll('.circle').forEach(circle => {
-        circle.addEventListener('dblclick', function(e) {
-            e.stopPropagation();
-            handleColorChange(this, 3);
-        });
-    });
-    
-    // Restaurar estados desde localStorage
-    document.querySelectorAll('.sunbed, .circle').forEach(element => {
-        const isSunbed = element.classList.contains('sunbed');
-        const storageKey = isSunbed ? 
-            'sunbed_color_' + element.id : 
-            'circle_color_' + element.id;
-        const savedStep = localStorage.getItem(storageKey);
-        
-        if (savedStep) {
-            const maxSteps = isSunbed ? 6 : 3;
-            for (let i = 1; i <= maxSteps; i++) {
-                element.classList.remove('step' + i);
-            }
-            element.classList.add('step' + savedStep);
-            element.dataset.actualStep = savedStep;
-        }
-    });
 });
