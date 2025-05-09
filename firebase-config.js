@@ -24,35 +24,69 @@ const auth = firebase.auth();
 
 // Función para sincronizar el estado de los sunbeds
 function syncSunbedState(sunbedId, state) {
+  if (!sunbedId || !state) return Promise.reject('Parámetros inválidos');
+  
+  const sunbed = document.getElementById(sunbedId);
+  if (!sunbed) return Promise.reject('Sunbed no encontrado');
+
+  // Obtener el color actual de las clases
+  const currentStep = sunbed.dataset.actualStep || '0';
+  
   return db.collection('sunbeds').doc(sunbedId).set({
-    color: state.color,
-    clientName: state.clientName,
+    color: state.color || '',
+    clientName: state.clientName || '',
+    step: currentStep,
     lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(error => {
+    console.error('Error al sincronizar sunbed:', error);
+    throw error;
   });
 }
 
 // Función para sincronizar el estado de los círculos
 function syncCircleState(circleId, state) {
+  if (!circleId || !state) return Promise.reject('Parámetros inválidos');
+  
+  const circle = document.getElementById(circleId);
+  if (!circle) return Promise.reject('Círculo no encontrado');
+
+  // Obtener el color actual de las clases
+  const currentStep = circle.dataset.actualStep || '0';
+  
   return db.collection('circles').doc(circleId).set({
-    color: state.color,
+    color: state.color || '',
+    step: currentStep,
     lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(error => {
+    console.error('Error al sincronizar círculo:', error);
+    throw error;
   });
 }
 
 // Función para sincronizar el registro de la calculadora
 function syncCalculatorLog(log) {
+  if (!log) return Promise.reject('Log inválido');
+  
   return db.collection('calculatorLogs').add({
     log: log,
     timestamp: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(error => {
+    console.error('Error al sincronizar log de calculadora:', error);
+    throw error;
   });
 }
 
 // Función para sincronizar la visibilidad de filas y sombrillas
 function syncVisibilityState(state) {
+  if (!state) return Promise.reject('Estado inválido');
+  
   return db.collection('visibility').doc('current').set({
-    rows: state.rows,
-    umbrellas: state.umbrellas,
+    rows: state.rows || [],
+    umbrellas: state.umbrellas || [],
     lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(error => {
+    console.error('Error al sincronizar visibilidad:', error);
+    throw error;
   });
 }
 
@@ -105,9 +139,18 @@ function updateSunbedUI(sunbedId, data) {
   console.log('Intentando actualizar sunbed:', sunbedId, data);
   const sunbed = document.getElementById(sunbedId);
   if (sunbed) {
-    if (data.color) {
-      sunbed.style.backgroundColor = data.color;
+    // Actualizar el color basado en el paso
+    if (data.step) {
+      // Remover todas las clases de paso anteriores
+      for (let i = 1; i <= 6; i++) {
+        sunbed.classList.remove('step' + i);
+      }
+      // Agregar la nueva clase de paso
+      sunbed.classList.add('step' + data.step);
+      sunbed.dataset.actualStep = data.step;
     }
+    
+    // Actualizar el nombre del cliente
     const nameInput = sunbed.querySelector('.customer_name');
     if (nameInput && data.clientName) {
       nameInput.value = data.clientName;
@@ -121,8 +164,17 @@ function updateSunbedUI(sunbedId, data) {
 function updateCircleUI(circleId, data) {
   console.log('Intentando actualizar círculo:', circleId, data);
   const circle = document.getElementById(circleId);
-  if (circle && data.color) {
-    circle.style.backgroundColor = data.color;
+  if (circle) {
+    // Actualizar el color basado en el paso
+    if (data.step) {
+      // Remover todas las clases de paso anteriores
+      for (let i = 1; i <= 3; i++) {
+        circle.classList.remove('step' + i);
+      }
+      // Agregar la nueva clase de paso
+      circle.classList.add('step' + data.step);
+      circle.dataset.actualStep = data.step;
+    }
     console.log('Círculo actualizado:', circleId);
   } else {
     console.warn('No se encontró el círculo:', circleId);
@@ -152,6 +204,8 @@ function updateVisibilityUI(data) {
 // Función para verificar la conexión con Firestore
 function checkFirestoreConnection() {
   const connectionStatus = document.getElementById('connectionStatus');
+  if (!connectionStatus) return; // Salir si no existe el elemento
+
   connectionStatus.textContent = '...';
   connectionStatus.style.backgroundColor = 'rgba(240, 240, 240, 0.8)';
   connectionStatus.style.color = '#333';
@@ -161,6 +215,8 @@ function checkFirestoreConnection() {
     timestamp: firebase.firestore.FieldValue.serverTimestamp()
   })
   .then(() => {
+    if (!connectionStatus) return; // Verificar si el elemento aún existe
+    
     connectionStatus.textContent = 'OK';
     connectionStatus.style.backgroundColor = 'rgba(76, 175, 80, 0.8)';
     connectionStatus.style.color = 'white';
@@ -169,6 +225,8 @@ function checkFirestoreConnection() {
     const startTime = Date.now();
     return db.collection('connection_test').doc('test').get()
       .then(() => {
+        if (!connectionStatus) return; // Verificar si el elemento aún existe
+        
         const latency = Date.now() - startTime;
         if (latency < 100) {
           connectionStatus.textContent = 'OK';
@@ -178,6 +236,8 @@ function checkFirestoreConnection() {
       });
   })
   .catch((error) => {
+    if (!connectionStatus) return; // Verificar si el elemento aún existe
+    
     connectionStatus.textContent = 'X';
     connectionStatus.style.backgroundColor = 'rgba(244, 67, 54, 0.8)';
     connectionStatus.style.color = 'white';
@@ -195,9 +255,10 @@ function checkFirestoreConnection() {
 }
 
 // Verificar conexión cada 30 segundos
-setInterval(checkFirestoreConnection, 30000);
+let connectionCheckInterval = setInterval(checkFirestoreConnection, 30000);
 
 // Verificar conexión inicial
 document.addEventListener('DOMContentLoaded', () => {
   checkFirestoreConnection();
+  listenToChanges(); // Asegurarse de que la escucha de cambios se inicie
 }); 

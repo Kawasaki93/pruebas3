@@ -991,9 +991,11 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 
         el.on('dblclick', function (event) {
             event.stopPropagation();
+            console.log('Doble clic detectado en:', el.attr('id'));
 
             const currentStep = parseInt(el.data('actual-step')) || 0;
             const newStep = currentStep >= stepsCount ? 1 : currentStep + 1;
+            console.log('Cambiando de paso', currentStep, 'a', newStep);
 
             // Eliminar clases anteriores
             for (let i = 1; i <= stepsCount; i++) {
@@ -1011,11 +1013,13 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
             if (el.hasClass('sunbed')) {
                 syncSunbedState(el.attr('id'), {
                     color: el.css('backgroundColor'),
-                    clientName: el.find('.customer_name').val()
+                    clientName: el.find('.customer_name').val(),
+                    step: newStep
                 });
             } else if (el.hasClass('circle')) {
                 syncCircleState(el.attr('id'), {
-                    color: el.css('backgroundColor')
+                    color: el.css('backgroundColor'),
+                    step: newStep
                 });
             }
         });
@@ -1033,8 +1037,10 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 }
 
 // Aplicamos color cycle separado
-setupColorCycle('.circle', 3, 'circle_color_');
-setupColorCycle('.sunbed', 6, 'sunbed_color_');
+$(document).ready(function() {
+    setupColorCycle('.circle', 3, 'circle_color_');
+    setupColorCycle('.sunbed', 6, 'sunbed_color_');
+});
 
 
 //------zona pruebas
@@ -1208,4 +1214,76 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   });
+});
+
+// Función para manejar el cambio de color
+function handleColorChange(element, maxSteps) {
+    const currentStep = parseInt(element.dataset.actualStep) || 0;
+    const newStep = currentStep >= maxSteps ? 1 : currentStep + 1;
+    
+    // Remover todas las clases de paso anteriores
+    for (let i = 1; i <= maxSteps; i++) {
+        element.classList.remove('step' + i);
+    }
+    
+    // Agregar la nueva clase
+    element.classList.add('step' + newStep);
+    element.dataset.actualStep = newStep;
+    
+    // Guardar en localStorage
+    const storageKey = element.classList.contains('sunbed') ? 
+        'sunbed_color_' + element.id : 
+        'circle_color_' + element.id;
+    localStorage.setItem(storageKey, newStep);
+    
+    // Sincronizar con Firebase
+    if (element.classList.contains('sunbed')) {
+        syncSunbedState(element.id, {
+            color: element.style.backgroundColor,
+            clientName: element.querySelector('.customer_name')?.value || '',
+            step: newStep
+        });
+    } else if (element.classList.contains('circle')) {
+        syncCircleState(element.id, {
+            color: element.style.backgroundColor,
+            step: newStep
+        });
+    }
+}
+
+// Configurar los event listeners para el cambio de color
+document.addEventListener('DOMContentLoaded', function() {
+    // Para sunbeds
+    document.querySelectorAll('.sunbed').forEach(sunbed => {
+        sunbed.addEventListener('dblclick', function(e) {
+            e.stopPropagation();
+            handleColorChange(this, 6);
+        });
+    });
+    
+    // Para círculos
+    document.querySelectorAll('.circle').forEach(circle => {
+        circle.addEventListener('dblclick', function(e) {
+            e.stopPropagation();
+            handleColorChange(this, 3);
+        });
+    });
+    
+    // Restaurar estados desde localStorage
+    document.querySelectorAll('.sunbed, .circle').forEach(element => {
+        const isSunbed = element.classList.contains('sunbed');
+        const storageKey = isSunbed ? 
+            'sunbed_color_' + element.id : 
+            'circle_color_' + element.id;
+        const savedStep = localStorage.getItem(storageKey);
+        
+        if (savedStep) {
+            const maxSteps = isSunbed ? 6 : 3;
+            for (let i = 1; i <= maxSteps; i++) {
+                element.classList.remove('step' + i);
+            }
+            element.classList.add('step' + savedStep);
+            element.dataset.actualStep = savedStep;
+        }
+    });
 });
