@@ -17,9 +17,74 @@ let syncQueue = new Map();
 let lastSyncTime = null;
 let hamacasListener = null;
 let pagosListener = null;
+let serverStatus = {
+  isConnected: false,
+  lastCheck: null,
+  connectionAttempts: 0
+};
 
 // Funciones para Firebase
 const FirebaseService = {
+  // Verificar estado del servidor
+  async verificarEstadoServidor() {
+    try {
+      console.log('Verificando estado del servidor...');
+      
+      // Intentar una operación simple de lectura
+      const testDoc = await db.collection('hamacas').limit(1).get();
+      
+      serverStatus.isConnected = true;
+      serverStatus.lastCheck = new Date();
+      serverStatus.connectionAttempts = 0;
+      
+      // Actualizar UI con el estado
+      this.actualizarEstadoConexion(true);
+      
+      console.log('Servidor conectado y funcionando correctamente');
+      return true;
+    } catch (error) {
+      console.error('Error al verificar estado del servidor:', error);
+      serverStatus.isConnected = false;
+      serverStatus.connectionAttempts++;
+      
+      // Actualizar UI con el estado
+      this.actualizarEstadoConexion(false);
+      
+      // Reintentar después de un error
+      if (serverStatus.connectionAttempts < 3) {
+        setTimeout(() => this.verificarEstadoServidor(), 5000);
+      }
+      
+      return false;
+    }
+  },
+
+  // Actualizar UI con el estado de la conexión
+  actualizarEstadoConexion(conectado) {
+    const statusElement = document.getElementById('serverStatus');
+    if (!statusElement) {
+      // Crear elemento si no existe
+      const div = document.createElement('div');
+      div.id = 'serverStatus';
+      div.style.position = 'fixed';
+      div.style.top = '10px';
+      div.style.right = '10px';
+      div.style.padding = '10px';
+      div.style.borderRadius = '5px';
+      div.style.zIndex = '1000';
+      document.body.appendChild(div);
+    }
+
+    const element = document.getElementById('serverStatus');
+    if (conectado) {
+      element.style.backgroundColor = '#4CAF50';
+      element.textContent = 'Servidor Conectado';
+    } else {
+      element.style.backgroundColor = '#f44336';
+      element.textContent = 'Servidor Desconectado';
+    }
+  },
+
   // Inicializar Firebase
   async inicializar() {
     try {
@@ -46,9 +111,15 @@ const FirebaseService = {
       db.settings({
         cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
         merge: true,
-        experimentalForceLongPolling: true, // Forzar long polling para mejor sincronización
+        experimentalForceLongPolling: true,
         experimentalAutoDetectLongPolling: true
       });
+
+      // Verificar estado inicial del servidor
+      await this.verificarEstadoServidor();
+
+      // Configurar verificación periódica del servidor
+      setInterval(() => this.verificarEstadoServidor(), 30000);
 
       // Configurar listeners de estado de red
       this.setupNetworkListeners();
@@ -62,6 +133,7 @@ const FirebaseService = {
       return true;
     } catch (error) {
       console.error('Error al inicializar Firebase:', error);
+      this.actualizarEstadoConexion(false);
       return false;
     }
   },
@@ -71,13 +143,15 @@ const FirebaseService = {
     window.addEventListener('online', () => {
       console.log('Conexión restaurada');
       isOnline = true;
+      this.verificarEstadoServidor();
       this.syncPendingChanges();
-      this.reiniciarListeners(); // Reiniciar listeners al recuperar conexión
+      this.reiniciarListeners();
     });
 
     window.addEventListener('offline', () => {
       console.log('Conexión perdida');
       isOnline = false;
+      this.actualizarEstadoConexion(false);
     });
   },
 
@@ -209,11 +283,27 @@ const FirebaseService = {
       });
   },
 
-  // Guardar hamaca con mejor manejo de sincronización
+  // Guardar hamaca con verificación de servidor
   async guardarHamaca(hamacaId, datos) {
     try {
       console.log('Guardando hamaca:', hamacaId, datos);
       
+      // Verificar estado del servidor antes de guardar
+      if (!serverStatus.isConnected) {
+        console.log('Servidor no disponible, guardando localmente');
+        // Guardar en localStorage
+        const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
+        hamacasLocales[hamacaId] = {
+          ...datos,
+          ultimaActualizacion: new Date().toISOString()
+        };
+        localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
+        
+        // Actualizar UI
+        this.actualizarUIHamaca(hamacaId, datos);
+        return;
+      }
+
       // Preparar datos con timestamp
       const datosCompletos = {
         ...datos,
@@ -229,36 +319,37 @@ const FirebaseService = {
       localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
 
       // Actualizar UI inmediatamente
-      const hamaca = document.querySelector(`#${hamacaId}`);
-      if (hamaca) {
-        if (datos.step !== undefined) {
-          for (let i = 1; i <= 6; i++) {
-            hamaca.classList.remove(`step${i}`);
-          }
-          if (datos.step > 0) {
-            hamaca.classList.add(`step${datos.step}`);
-          }
-          hamaca.dataset.actualStep = datos.step;
-        }
-        if (datos.cliente) {
-          const inputCliente = hamaca.querySelector('.customer_name');
-          if (inputCliente) {
-            inputCliente.value = datos.cliente;
-          }
-        }
-      }
+      this.actualizarUIHamaca(hamacaId, datos);
 
-      // Guardar en Firebase si hay conexión
-      if (isOnline) {
-        await db.collection('hamacas').doc(hamacaId).set(datosCompletos, { merge: true });
-        console.log('Hamaca guardada en Firebase');
-      } else {
-        syncQueue.set(hamacaId, datosCompletos);
-        console.log('Hamaca guardada localmente, pendiente de sincronización');
-      }
+      // Guardar en Firebase
+      await db.collection('hamacas').doc(hamacaId).set(datosCompletos, { merge: true });
+      console.log('Hamaca guardada en Firebase');
     } catch (error) {
       console.error('Error al guardar hamaca:', error);
+      this.actualizarEstadoConexion(false);
       throw error;
+    }
+  },
+
+  // Actualizar UI de una hamaca
+  actualizarUIHamaca(hamacaId, datos) {
+    const hamaca = document.querySelector(`#${hamacaId}`);
+    if (hamaca) {
+      if (datos.step !== undefined) {
+        for (let i = 1; i <= 6; i++) {
+          hamaca.classList.remove(`step${i}`);
+        }
+        if (datos.step > 0) {
+          hamaca.classList.add(`step${datos.step}`);
+        }
+        hamaca.dataset.actualStep = datos.step;
+      }
+      if (datos.cliente) {
+        const inputCliente = hamaca.querySelector('.customer_name');
+        if (inputCliente) {
+          inputCliente.value = datos.cliente;
+        }
+      }
     }
   },
 
