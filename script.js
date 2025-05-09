@@ -11,25 +11,46 @@ if ('serviceWorker' in navigator) {
 // Variables globales
 let totalEfectivo = 0;
 let totalTarjeta = 0;
+let db;
+let lastSyncTimestamp = null;
+let pendingChanges = new Map();
+let isOnline = navigator.onLine;
 
 // Funciones para Firebase
 const FirebaseService = {
   // Inicializar Firebase
   async inicializar() {
     try {
-      if (!firebase) {
+      console.log('Iniciando Firebase...');
+      
+      if (typeof firebase === 'undefined') {
         throw new Error('Firebase no está disponible');
       }
 
-      if (!firebaseConfig) {
-        throw new Error('Configuración de Firebase no encontrada');
+      // Obtener la instancia de Firestore
+      db = firebase.firestore();
+      
+      // Configurar persistencia offline
+      try {
+        await db.enablePersistence({
+          synchronizeTabs: true
+        });
+        console.log('Persistencia offline habilitada');
+      } catch (err) {
+        console.warn('Advertencia de persistencia:', err);
       }
 
-      firebase.initializeApp(firebaseConfig);
-      console.log('Firebase inicializado correctamente');
+      // Configurar Firestore
+      db.settings({
+        cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
+        merge: true
+      });
 
-      // Iniciar listeners en tiempo real
-      this.iniciarListeners();
+      // Configurar listeners de estado de red
+      this.setupNetworkListeners();
+      
+      // Iniciar listeners
+      await this.init();
       
       return true;
     } catch (error) {
@@ -38,19 +59,55 @@ const FirebaseService = {
     }
   },
 
-  // Inicializar listeners
-  init() {
-    console.log('Iniciando Firebase Service...');
-    this.setupHamacasListener();
-    this.setupPagosListener();
-    this.setupClientesListener();
+  // Configurar listeners de estado de red
+  setupNetworkListeners() {
+    window.addEventListener('online', () => {
+      console.log('Conexión restaurada');
+      isOnline = true;
+      this.syncPendingChanges();
+    });
+
+    window.addEventListener('offline', () => {
+      console.log('Conexión perdida');
+      isOnline = false;
+    });
   },
 
-  // Listener para hamacas
-  setupHamacasListener() {
-    console.log('Configurando listener de hamacas...');
+  // Sincronizar cambios pendientes
+  async syncPendingChanges() {
+    if (!isOnline || pendingChanges.size === 0) return;
+
+    console.log('Sincronizando cambios pendientes...');
+    const batch = db.batch();
+    let batchCount = 0;
+
+    for (const [docId, changes] of pendingChanges) {
+      const docRef = db.collection('hamacas').doc(docId);
+      batch.set(docRef, changes, { merge: true });
+      batchCount++;
+
+      if (batchCount >= 500) {
+        await batch.commit();
+        batchCount = 0;
+      }
+    }
+
+    if (batchCount > 0) {
+      await batch.commit();
+    }
+
+    pendingChanges.clear();
+    console.log('Cambios pendientes sincronizados');
+  },
+
+  // Inicializar listeners
+  async init() {
+    console.log('Iniciando listeners de Firebase...');
+    
+    // Configurar listener de hamacas
     db.collection('hamacas').onSnapshot((snapshot) => {
       console.log('Cambios detectados en hamacas:', snapshot.docChanges().length);
+      
       snapshot.docChanges().forEach((change) => {
         const datos = change.doc.data();
         const hamacaId = change.doc.id;
@@ -60,11 +117,9 @@ const FirebaseService = {
           if (change.type === 'added' || change.type === 'modified') {
             // Actualizar color
             if (datos.step !== undefined) {
-              // Remover clases anteriores
               for (let i = 1; i <= 6; i++) {
                 hamaca.classList.remove(`step${i}`);
               }
-              // Agregar nueva clase
               if (datos.step > 0) {
                 hamaca.classList.add(`step${datos.step}`);
               }
@@ -84,11 +139,8 @@ const FirebaseService = {
     }, (error) => {
       console.error('Error en listener de hamacas:', error);
     });
-  },
 
-  // Listener para pagos
-  setupPagosListener() {
-    console.log('Configurando listener de pagos...');
+    // Configurar listener de pagos
     db.collection('pagos').onSnapshot((snapshot) => {
       console.log('Cambios detectados en pagos:', snapshot.docChanges().length);
       snapshot.docChanges().forEach((change) => {
@@ -107,11 +159,8 @@ const FirebaseService = {
     }, (error) => {
       console.error('Error en listener de pagos:', error);
     });
-  },
 
-  // Listener para clientes
-  setupClientesListener() {
-    console.log('Configurando listener de clientes...');
+    // Configurar listener de clientes
     db.collection('clientes').onSnapshot((snapshot) => {
       console.log('Cambios detectados en clientes:', snapshot.docChanges().length);
       snapshot.docChanges().forEach((change) => {
@@ -136,12 +185,17 @@ const FirebaseService = {
   async guardarHamaca(hamacaId, datos) {
     try {
       console.log('Guardando hamaca:', hamacaId, datos);
-      await db.collection('hamacas').doc(hamacaId).set({
+      
+      const datosCompletos = {
         ...datos,
         ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
+
+      await db.collection('hamacas').doc(hamacaId).set(datosCompletos, { merge: true });
+      console.log('Hamaca guardada exitosamente');
     } catch (error) {
       console.error('Error al guardar hamaca:', error);
+      throw error;
     }
   },
 
@@ -149,12 +203,17 @@ const FirebaseService = {
   async guardarPago(datos) {
     try {
       console.log('Guardando pago:', datos);
-      await db.collection('pagos').add({
+      
+      const datosCompletos = {
         ...datos,
         fecha: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
+
+      await db.collection('pagos').add(datosCompletos);
+      console.log('Pago guardado exitosamente');
     } catch (error) {
       console.error('Error al guardar pago:', error);
+      throw error;
     }
   },
 
@@ -162,12 +221,17 @@ const FirebaseService = {
   async guardarCliente(hamacaId, nombreCliente) {
     try {
       console.log('Guardando cliente:', hamacaId, nombreCliente);
-      await db.collection('clientes').doc(hamacaId).set({
+      
+      const datosCompletos = {
         nombre: nombreCliente,
         fechaAsignacion: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
+
+      await db.collection('clientes').doc(hamacaId).set(datosCompletos, { merge: true });
+      console.log('Cliente guardado exitosamente');
     } catch (error) {
       console.error('Error al guardar cliente:', error);
+      throw error;
     }
   },
 
@@ -202,13 +266,12 @@ const FirebaseService = {
   }
 };
 
-// Inicializar Firebase al cargar la página
+// Inicializar Firebase cuando el documento esté listo
 document.addEventListener('DOMContentLoaded', async () => {
+  console.log('Documento cargado, iniciando Firebase...');
   try {
     const inicializado = await FirebaseService.inicializar();
-    if (inicializado) {
-      await FirebaseService.cargarEstadoHamacas();
-    } else {
+    if (!inicializado) {
       console.error('No se pudo inicializar Firebase');
     }
   } catch (error) {
