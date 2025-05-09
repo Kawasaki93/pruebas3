@@ -10,9 +10,81 @@ if ('serviceWorker' in navigator) {
 
 // Funciones para Firebase
 const FirebaseService = {
+  // Inicializar Firebase
+  async inicializar() {
+    try {
+      if (!firebase) {
+        throw new Error('Firebase no está disponible');
+      }
+
+      if (!firebaseConfig) {
+        throw new Error('Configuración de Firebase no encontrada');
+      }
+
+      firebase.initializeApp(firebaseConfig);
+      console.log('Firebase inicializado correctamente');
+
+      // Iniciar listeners en tiempo real
+      this.iniciarListeners();
+      
+      return true;
+    } catch (error) {
+      console.error('Error al inicializar Firebase:', error);
+      return false;
+    }
+  },
+
+  // Iniciar listeners en tiempo real
+  iniciarListeners() {
+    // Listener para hamacas
+    db.collection('hamacas').onSnapshot((snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          const datos = change.doc.data();
+          const hamaca = document.querySelector(`#${change.doc.id}`);
+          if (hamaca) {
+            // Actualizar color
+            if (datos.color) {
+              hamaca.style.backgroundColor = datos.color;
+            }
+            // Actualizar nombre del cliente
+            if (datos.cliente) {
+              const inputCliente = hamaca.querySelector('.customer_name');
+              if (inputCliente) {
+                inputCliente.value = datos.cliente;
+              }
+            }
+          }
+        }
+      });
+    });
+
+    // Listener para pagos
+    db.collection('pagos').onSnapshot((snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const pago = change.doc.data();
+          // Actualizar totales
+          actualizarTotales(pago.metodoPago, pago.total);
+          // Agregar al historial
+          agregarAlHistorial(
+            pago.hamaca,
+            pago.total,
+            pago.recibido,
+            pago.cambio,
+            pago.metodoPago
+          );
+        }
+      });
+    });
+  },
+
   // Guardar estado de una hamaca
   async guardarHamaca(hamacaId, datos) {
     try {
+      if (!firebase.apps.length) {
+        await this.inicializar();
+      }
       await db.collection('hamacas').doc(hamacaId).set({
         ...datos,
         ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
@@ -49,21 +121,22 @@ const FirebaseService = {
     }
   },
 
-  // Cargar estado de todas las hamacas
+  // Cargar estado inicial de las hamacas
   async cargarEstadoHamacas() {
     try {
       const snapshot = await db.collection('hamacas').get();
       snapshot.forEach(doc => {
         const datos = doc.data();
-        const hamaca = document.querySelector(`#clon_${doc.id}`);
+        const hamaca = document.querySelector(`#${doc.id}`);
         if (hamaca) {
-          // Restaurar color
           if (datos.color) {
             hamaca.style.backgroundColor = datos.color;
           }
-          // Restaurar nombre del cliente
           if (datos.cliente) {
-            hamaca.querySelector('.customer_name').value = datos.cliente;
+            const inputCliente = hamaca.querySelector('.customer_name');
+            if (inputCliente) {
+              inputCliente.value = datos.cliente;
+            }
           }
         }
       });
@@ -73,9 +146,18 @@ const FirebaseService = {
   }
 };
 
-// Cargar estado inicial al iniciar la aplicación
-document.addEventListener('DOMContentLoaded', () => {
-  FirebaseService.cargarEstadoHamacas();
+// Inicializar Firebase al cargar la página
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const inicializado = await FirebaseService.inicializar();
+    if (inicializado) {
+      await FirebaseService.cargarEstadoHamacas();
+    } else {
+      console.error('No se pudo inicializar Firebase');
+    }
+  } catch (error) {
+    console.error('Error al cargar la aplicación:', error);
+  }
 });
 
 let variable1;
@@ -1137,7 +1219,23 @@ $(document).on('click', '.sunbed', function() {
   // Guardar en Firebase
   FirebaseService.guardarHamaca(hamacaId, {
     color: color,
-    cliente: cliente
+    cliente: cliente,
+    ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  if (cliente) {
+    FirebaseService.guardarCliente(hamacaId, cliente);
+  }
+});
+
+// Modificar la función que maneja los cambios en el nombre del cliente
+$(document).on('change', '.customer_name', function() {
+  const hamacaId = $(this).closest('.sunbed').attr('id');
+  const cliente = $(this).val();
+
+  FirebaseService.guardarHamaca(hamacaId, {
+    cliente: cliente,
+    ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
   });
 
   if (cliente) {
