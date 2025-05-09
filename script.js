@@ -8,6 +8,10 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// Variables globales
+let totalEfectivo = 0;
+let totalTarjeta = 0;
+
 // Funciones para Firebase
 const FirebaseService = {
   // Inicializar Firebase
@@ -34,20 +38,40 @@ const FirebaseService = {
     }
   },
 
-  // Iniciar listeners en tiempo real
-  iniciarListeners() {
-    // Listener para hamacas
+  // Inicializar listeners
+  init() {
+    console.log('Iniciando Firebase Service...');
+    this.setupHamacasListener();
+    this.setupPagosListener();
+    this.setupClientesListener();
+  },
+
+  // Listener para hamacas
+  setupHamacasListener() {
+    console.log('Configurando listener de hamacas...');
     db.collection('hamacas').onSnapshot((snapshot) => {
+      console.log('Cambios detectados en hamacas:', snapshot.docChanges().length);
       snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added' || change.type === 'modified') {
-          const datos = change.doc.data();
-          const hamaca = document.querySelector(`#${change.doc.id}`);
-          if (hamaca) {
+        const datos = change.doc.data();
+        const hamacaId = change.doc.id;
+        const hamaca = document.querySelector(`#${hamacaId}`);
+
+        if (hamaca) {
+          if (change.type === 'added' || change.type === 'modified') {
             // Actualizar color
-            if (datos.color) {
-              hamaca.style.backgroundColor = datos.color;
+            if (datos.step !== undefined) {
+              // Remover clases anteriores
+              for (let i = 1; i <= 6; i++) {
+                hamaca.classList.remove(`step${i}`);
+              }
+              // Agregar nueva clase
+              if (datos.step > 0) {
+                hamaca.classList.add(`step${datos.step}`);
+              }
+              hamaca.dataset.actualStep = datos.step;
             }
-            // Actualizar nombre del cliente
+
+            // Actualizar cliente
             if (datos.cliente) {
               const inputCliente = hamaca.querySelector('.customer_name');
               if (inputCliente) {
@@ -57,16 +81,20 @@ const FirebaseService = {
           }
         }
       });
+    }, (error) => {
+      console.error('Error en listener de hamacas:', error);
     });
+  },
 
-    // Listener para pagos
+  // Listener para pagos
+  setupPagosListener() {
+    console.log('Configurando listener de pagos...');
     db.collection('pagos').onSnapshot((snapshot) => {
+      console.log('Cambios detectados en pagos:', snapshot.docChanges().length);
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'added') {
           const pago = change.doc.data();
-          // Actualizar totales
           actualizarTotales(pago.metodoPago, pago.total);
-          // Agregar al historial
           agregarAlHistorial(
             pago.hamaca,
             pago.total,
@@ -76,20 +104,42 @@ const FirebaseService = {
           );
         }
       });
+    }, (error) => {
+      console.error('Error en listener de pagos:', error);
     });
   },
 
-  // Guardar estado de una hamaca
+  // Listener para clientes
+  setupClientesListener() {
+    console.log('Configurando listener de clientes...');
+    db.collection('clientes').onSnapshot((snapshot) => {
+      console.log('Cambios detectados en clientes:', snapshot.docChanges().length);
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          const cliente = change.doc.data();
+          const hamacaId = change.doc.id;
+          const hamaca = document.querySelector(`#${hamacaId}`);
+          if (hamaca) {
+            const inputCliente = hamaca.querySelector('.customer_name');
+            if (inputCliente) {
+              inputCliente.value = cliente.nombre;
+            }
+          }
+        }
+      });
+    }, (error) => {
+      console.error('Error en listener de clientes:', error);
+    });
+  },
+
+  // Guardar hamaca
   async guardarHamaca(hamacaId, datos) {
     try {
-      if (!firebase.apps.length) {
-        await this.inicializar();
-      }
+      console.log('Guardando hamaca:', hamacaId, datos);
       await db.collection('hamacas').doc(hamacaId).set({
         ...datos,
         ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
       });
-      console.log('Hamaca guardada:', hamacaId);
     } catch (error) {
       console.error('Error al guardar hamaca:', error);
     }
@@ -98,11 +148,11 @@ const FirebaseService = {
   // Guardar pago
   async guardarPago(datos) {
     try {
+      console.log('Guardando pago:', datos);
       await db.collection('pagos').add({
         ...datos,
         fecha: firebase.firestore.FieldValue.serverTimestamp()
       });
-      console.log('Pago guardado');
     } catch (error) {
       console.error('Error al guardar pago:', error);
     }
@@ -111,11 +161,11 @@ const FirebaseService = {
   // Guardar cliente
   async guardarCliente(hamacaId, nombreCliente) {
     try {
+      console.log('Guardando cliente:', hamacaId, nombreCliente);
       await db.collection('clientes').doc(hamacaId).set({
         nombre: nombreCliente,
         fechaAsignacion: firebase.firestore.FieldValue.serverTimestamp()
       });
-      console.log('Cliente guardado:', nombreCliente);
     } catch (error) {
       console.error('Error al guardar cliente:', error);
     }
@@ -129,8 +179,14 @@ const FirebaseService = {
         const datos = doc.data();
         const hamaca = document.querySelector(`#${doc.id}`);
         if (hamaca) {
-          if (datos.color) {
-            hamaca.style.backgroundColor = datos.color;
+          if (datos.step !== undefined) {
+            for (let i = 1; i <= 6; i++) {
+              hamaca.classList.remove(`step${i}`);
+            }
+            if (datos.step > 0) {
+              hamaca.classList.add(`step${datos.step}`);
+            }
+            hamaca.dataset.actualStep = datos.step;
           }
           if (datos.cliente) {
             const inputCliente = hamaca.querySelector('.customer_name');
@@ -843,9 +899,6 @@ SunbedController.init();
 
 //CALCuLadora--------------------------------
 
-let totalEfectivo = 0;
-let totalTarjeta = 0;
-
 function calcularCambio() {
   const hamaca = document.getElementById('hamaca').value;
   const totalSelect = document.getElementById('totalSelect');
@@ -1107,6 +1160,16 @@ function setupColorCycle(selector, stepsCount, storagePrefix) {
 
             // Guardar en localStorage
             localStorage.setItem(storageKey, newStep);
+
+            // Guardar en Firebase si es una hamaca
+            if (el.hasClass('sunbed')) {
+                const hamacaId = el.attr('id');
+                const cliente = el.find('.customer_name').val();
+                FirebaseService.guardarHamaca(hamacaId, {
+                    step: newStep,
+                    cliente: cliente
+                });
+            }
         });
 
         // Restaurar estado desde localStorage
@@ -1213,14 +1276,13 @@ function agregarAlHistorial(hamaca, total, recibido, cambio, metodo) {
 // Modificar la función que maneja los clics en las hamacas
 $(document).on('click', '.sunbed', function() {
   const hamacaId = $(this).attr('id');
-  const color = $(this).css('backgroundColor');
+  const currentStep = $(this).data('actual-step') || 0;
   const cliente = $(this).find('.customer_name').val();
 
   // Guardar en Firebase
   FirebaseService.guardarHamaca(hamacaId, {
-    color: color,
-    cliente: cliente,
-    ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+    step: currentStep,
+    cliente: cliente
   });
 
   if (cliente) {
@@ -1228,14 +1290,15 @@ $(document).on('click', '.sunbed', function() {
   }
 });
 
-// Modificar la función que maneja los cambios en el nombre del cliente
+// Evento para cambios en el nombre del cliente
 $(document).on('change', '.customer_name', function() {
   const hamacaId = $(this).closest('.sunbed').attr('id');
   const cliente = $(this).val();
+  const step = $(this).closest('.sunbed').data('actual-step') || 0;
 
   FirebaseService.guardarHamaca(hamacaId, {
-    cliente: cliente,
-    ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+    step: step,
+    cliente: cliente
   });
 
   if (cliente) {

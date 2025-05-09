@@ -170,19 +170,23 @@
     appId: "1:268304492138:web:1e583f94f6bf013f870c13"
   };
 
-  // Esperar a que Firebase esté listo
-  window.addEventListener('load', async () => {
-    try {
-      // Inicializar Firebase
-      firebase.initializeApp(firebaseConfig);
-      console.log('Firebase inicializado correctamente');
-      
-      // Inicializar Firestore
-      const db = firebase.firestore();
-      console.log('Firestore inicializado correctamente');
-    } catch (error) {
-      console.error('Error al inicializar Firebase:', error);
-    }
+  // Inicializar Firebase
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  // Habilitar persistencia offline
+  db.enablePersistence()
+    .catch((err) => {
+      if (err.code === 'failed-precondition') {
+        console.log('Persistencia fallida: Múltiples pestañas abiertas');
+      } else if (err.code === 'unimplemented') {
+        console.log('Persistencia no disponible en este navegador');
+      }
+    });
+
+  // Configurar Firestore para desarrollo
+  db.settings({
+    cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED
   });
 </script>
 </body>
