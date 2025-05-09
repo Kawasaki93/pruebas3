@@ -12,9 +12,9 @@ if ('serviceWorker' in navigator) {
 let totalEfectivo = 0;
 let totalTarjeta = 0;
 let db;
-let lastSyncTimestamp = null;
-let pendingChanges = new Map();
 let isOnline = navigator.onLine;
+let syncQueue = new Map();
+let lastSyncTime = null;
 
 // Funciones para Firebase
 const FirebaseService = {
@@ -49,6 +49,9 @@ const FirebaseService = {
       // Configurar listeners de estado de red
       this.setupNetworkListeners();
       
+      // Cargar datos locales
+      await this.cargarDatosLocales();
+      
       // Iniciar listeners
       await this.init();
       
@@ -73,15 +76,56 @@ const FirebaseService = {
     });
   },
 
+  // Cargar datos locales
+  async cargarDatosLocales() {
+    console.log('Cargando datos locales...');
+    
+    // Cargar estado de hamacas
+    const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
+    for (const [id, datos] of Object.entries(hamacasLocales)) {
+      const hamaca = document.querySelector(`#${id}`);
+      if (hamaca) {
+        // Actualizar UI
+        if (datos.step) {
+          for (let i = 1; i <= 6; i++) {
+            hamaca.classList.remove(`step${i}`);
+          }
+          if (datos.step > 0) {
+            hamaca.classList.add(`step${datos.step}`);
+          }
+          hamaca.dataset.actualStep = datos.step;
+        }
+        if (datos.cliente) {
+          const inputCliente = hamaca.querySelector('.customer_name');
+          if (inputCliente) {
+            inputCliente.value = datos.cliente;
+          }
+        }
+      }
+    }
+
+    // Cargar totales
+    totalEfectivo = parseFloat(localStorage.getItem('totalEfectivo') || '0');
+    totalTarjeta = parseFloat(localStorage.getItem('totalTarjeta') || '0');
+    this.actualizarUI();
+  },
+
+  // Actualizar UI con los totales
+  actualizarUI() {
+    document.getElementById('totalEfectivo').textContent = totalEfectivo.toFixed(2);
+    document.getElementById('totalTarjeta').textContent = totalTarjeta.toFixed(2);
+    document.getElementById('totalGeneral').textContent = (totalEfectivo + totalTarjeta).toFixed(2);
+  },
+
   // Sincronizar cambios pendientes
   async syncPendingChanges() {
-    if (!isOnline || pendingChanges.size === 0) return;
+    if (!isOnline || syncQueue.size === 0) return;
 
     console.log('Sincronizando cambios pendientes...');
     const batch = db.batch();
     let batchCount = 0;
 
-    for (const [docId, changes] of pendingChanges) {
+    for (const [docId, changes] of syncQueue) {
       const docRef = db.collection('hamacas').doc(docId);
       batch.set(docRef, changes, { merge: true });
       batchCount++;
@@ -96,7 +140,9 @@ const FirebaseService = {
       await batch.commit();
     }
 
-    pendingChanges.clear();
+    syncQueue.clear();
+    lastSyncTime = new Date();
+    localStorage.setItem('lastSyncTime', lastSyncTime.toISOString());
     console.log('Cambios pendientes sincronizados');
   },
 
@@ -133,6 +179,15 @@ const FirebaseService = {
                 inputCliente.value = datos.cliente;
               }
             }
+
+            // Actualizar localStorage
+            const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
+            hamacasLocales[hamacaId] = {
+              step: datos.step,
+              cliente: datos.cliente,
+              ultimaActualizacion: datos.ultimaActualizacion
+            };
+            localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
           }
         }
       });
@@ -146,8 +201,8 @@ const FirebaseService = {
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'added') {
           const pago = change.doc.data();
-          actualizarTotales(pago.metodoPago, pago.total);
-          agregarAlHistorial(
+          this.actualizarTotales(pago.metodoPago, pago.total);
+          this.agregarAlHistorial(
             pago.hamaca,
             pago.total,
             pago.recibido,
@@ -159,26 +214,6 @@ const FirebaseService = {
     }, (error) => {
       console.error('Error en listener de pagos:', error);
     });
-
-    // Configurar listener de clientes
-    db.collection('clientes').onSnapshot((snapshot) => {
-      console.log('Cambios detectados en clientes:', snapshot.docChanges().length);
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added' || change.type === 'modified') {
-          const cliente = change.doc.data();
-          const hamacaId = change.doc.id;
-          const hamaca = document.querySelector(`#${hamacaId}`);
-          if (hamaca) {
-            const inputCliente = hamaca.querySelector('.customer_name');
-            if (inputCliente) {
-              inputCliente.value = cliente.nombre;
-            }
-          }
-        }
-      });
-    }, (error) => {
-      console.error('Error en listener de clientes:', error);
-    });
   },
 
   // Guardar hamaca
@@ -186,13 +221,27 @@ const FirebaseService = {
     try {
       console.log('Guardando hamaca:', hamacaId, datos);
       
-      const datosCompletos = {
+      // Guardar en localStorage
+      const hamacasLocales = JSON.parse(localStorage.getItem('hamacas') || '{}');
+      hamacasLocales[hamacaId] = {
         ...datos,
-        ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+        ultimaActualizacion: new Date().toISOString()
       };
+      localStorage.setItem('hamacas', JSON.stringify(hamacasLocales));
 
-      await db.collection('hamacas').doc(hamacaId).set(datosCompletos, { merge: true });
-      console.log('Hamaca guardada exitosamente');
+      // Guardar en Firebase si hay conexión
+      if (isOnline) {
+        const datosCompletos = {
+          ...datos,
+          ultimaActualizacion: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('hamacas').doc(hamacaId).set(datosCompletos, { merge: true });
+        console.log('Hamaca guardada en Firebase');
+      } else {
+        // Agregar a la cola de sincronización
+        syncQueue.set(hamacaId, datos);
+        console.log('Hamaca guardada localmente, pendiente de sincronización');
+      }
     } catch (error) {
       console.error('Error al guardar hamaca:', error);
       throw error;
@@ -204,65 +253,77 @@ const FirebaseService = {
     try {
       console.log('Guardando pago:', datos);
       
-      const datosCompletos = {
+      // Guardar en localStorage
+      const pagosLocales = JSON.parse(localStorage.getItem('pagos') || '[]');
+      pagosLocales.push({
         ...datos,
-        fecha: firebase.firestore.FieldValue.serverTimestamp()
-      };
+        fecha: new Date().toISOString()
+      });
+      localStorage.setItem('pagos', JSON.stringify(pagosLocales));
 
-      await db.collection('pagos').add(datosCompletos);
-      console.log('Pago guardado exitosamente');
+      // Actualizar totales locales
+      this.actualizarTotales(datos.metodoPago, datos.total);
+
+      // Guardar en Firebase si hay conexión
+      if (isOnline) {
+        const datosCompletos = {
+          ...datos,
+          fecha: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('pagos').add(datosCompletos);
+        console.log('Pago guardado en Firebase');
+      } else {
+        console.log('Pago guardado localmente, pendiente de sincronización');
+      }
     } catch (error) {
       console.error('Error al guardar pago:', error);
       throw error;
     }
   },
 
-  // Guardar cliente
-  async guardarCliente(hamacaId, nombreCliente) {
-    try {
-      console.log('Guardando cliente:', hamacaId, nombreCliente);
-      
-      const datosCompletos = {
-        nombre: nombreCliente,
-        fechaAsignacion: firebase.firestore.FieldValue.serverTimestamp()
-      };
-
-      await db.collection('clientes').doc(hamacaId).set(datosCompletos, { merge: true });
-      console.log('Cliente guardado exitosamente');
-    } catch (error) {
-      console.error('Error al guardar cliente:', error);
-      throw error;
+  // Actualizar totales
+  actualizarTotales(metodo, monto) {
+    if (metodo === 'efectivo') {
+      totalEfectivo += monto;
+    } else {
+      totalTarjeta += monto;
     }
+
+    // Guardar en localStorage
+    localStorage.setItem('totalEfectivo', totalEfectivo.toString());
+    localStorage.setItem('totalTarjeta', totalTarjeta.toString());
+
+    // Actualizar UI
+    this.actualizarUI();
   },
 
-  // Cargar estado inicial de las hamacas
-  async cargarEstadoHamacas() {
-    try {
-      const snapshot = await db.collection('hamacas').get();
-      snapshot.forEach(doc => {
-        const datos = doc.data();
-        const hamaca = document.querySelector(`#${doc.id}`);
-        if (hamaca) {
-          if (datos.step !== undefined) {
-            for (let i = 1; i <= 6; i++) {
-              hamaca.classList.remove(`step${i}`);
-            }
-            if (datos.step > 0) {
-              hamaca.classList.add(`step${datos.step}`);
-            }
-            hamaca.dataset.actualStep = datos.step;
-          }
-          if (datos.cliente) {
-            const inputCliente = hamaca.querySelector('.customer_name');
-            if (inputCliente) {
-              inputCliente.value = datos.cliente;
-            }
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Error al cargar hamacas:', error);
-    }
+  // Agregar al historial
+  agregarAlHistorial(hamaca, total, recibido, cambio, metodo) {
+    const historial = document.getElementById('historial');
+    const li = document.createElement('li');
+
+    const fechaObj = new Date();
+    const dia = String(fechaObj.getDate()).padStart(2, '0');
+    const mes = String(fechaObj.getMonth() + 1).padStart(2, '0');
+    const anio = fechaObj.getFullYear();
+    const horas = String(fechaObj.getHours()).padStart(2, '0');
+    const minutos = String(fechaObj.getMinutes()).padStart(2, '0');
+    const fecha = `${dia}/${mes}/${anio} ${horas}:${minutos}`;
+
+    li.textContent = `Hamaca ${hamaca} - Total: €${total.toFixed(2)} - Recibido: €${recibido.toFixed(2)} - Cambio: €${cambio.toFixed(2)} - Método: ${metodo} - ${fecha}`;
+    historial.insertBefore(li, historial.firstChild);
+
+    // Guardar en localStorage
+    const historialLocal = JSON.parse(localStorage.getItem('historial') || '[]');
+    historialLocal.unshift({
+      hamaca,
+      total,
+      recibido,
+      cambio,
+      metodo,
+      fecha
+    });
+    localStorage.setItem('historial', JSON.stringify(historialLocal));
   }
 };
 
