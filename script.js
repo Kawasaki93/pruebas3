@@ -1634,3 +1634,70 @@ $(document).on('change', '.customer_name', function() {
     cliente: cliente
   });
 });
+
+// Función para guardar datos en Firebase
+function guardarDatosEnFirebase(datos) {
+  const database = firebase.database();
+  const referencia = database.ref('datos');
+  
+  return referencia.push(datos)
+    .then(() => {
+      console.log('Datos guardados correctamente en Firebase');
+      return true;
+    })
+    .catch(error => {
+      console.error('Error al guardar en Firebase:', error);
+      return false;
+    });
+}
+
+// Función para cargar datos desde Firebase
+function cargarDatosDesdeFirebase() {
+  const database = firebase.database();
+  const referencia = database.ref('datos');
+  
+  return referencia.once('value')
+    .then(snapshot => {
+      const datos = [];
+      snapshot.forEach(childSnapshot => {
+        datos.push(childSnapshot.val());
+      });
+      return datos;
+    })
+    .catch(error => {
+      console.error('Error al cargar datos desde Firebase:', error);
+      return [];
+    });
+}
+
+// Función para actualizar datos en Firebase
+function actualizarDatosEnFirebase(id, nuevosDatos) {
+  const database = firebase.database();
+  const referencia = database.ref(`datos/${id}`);
+  
+  return referencia.update(nuevosDatos)
+    .then(() => {
+      console.log('Datos actualizados correctamente en Firebase');
+      return true;
+    })
+    .catch(error => {
+      console.error('Error al actualizar en Firebase:', error);
+      return false;
+    });
+}
+
+// Función para eliminar datos en Firebase
+function eliminarDatosEnFirebase(id) {
+  const database = firebase.database();
+  const referencia = database.ref(`datos/${id}`);
+  
+  return referencia.remove()
+    .then(() => {
+      console.log('Datos eliminados correctamente de Firebase');
+      return true;
+    })
+    .catch(error => {
+      console.error('Error al eliminar de Firebase:', error);
+      return false;
+    });
+}
